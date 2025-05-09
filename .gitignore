@@ -1,0 +1,13 @@
+NQSvenv/
+.env/
+__pycache__/
+*.pyc
+*.pyo
+.DS_Store
+
+results/energy/checkpoints/*
+results/energy/data/*
+results/pretrain/checkpoints/*
+results/pretrain/data/*
+results/final/*
+results1/*
