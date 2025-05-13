@@ -13,12 +13,12 @@ parser = argparse.ArgumentParser(prog="SpinlessFermions",
 #https://stackoverflow.com/questions/14117415/in-python-using-argparse-allow-only-positive-integers/14117567
 
 parser.add_argument("-N", "--num_fermions", type=int,   default=2,     help="Number of fermions in physical system")
-parser.add_argument("-H", "--num_hidden",   type=int,   default=64,    help="Number of hidden neurons per layer")
+parser.add_argument("-H", "--num_hidden",   type=int,   default=64,    help="Number of hidden neurons per layer")#64
 parser.add_argument("-L", "--num_layers",   type=int,   default=2,     help="Number of layers within the network")
 parser.add_argument("-D", "--num_dets",     type=int,   default=1,     help="Number of determinants within the network's final layer")
 parser.add_argument("-V", "--V0",           type=float, default=0.,    help="Interaction strength (in harmonic units)")
 parser.add_argument("-S", "--sigma0",       type=float, default=0.5,   help="Interaction distance (in harmonic units")
-parser.add_argument("--preepochs",          type=int,   default=1000, help="Number of pre-epochs for the pretraining phase")
+parser.add_argument("--preepochs",          type=int,   default=5000, help="Number of pre-epochs for the pretraining phase")
 parser.add_argument("--epochs",             type=int,   default=10000, help="Number of epochs for the energy minimisation phase")
 parser.add_argument("-C", "--chunks",       type=int,   default=1,     help="Number of chunks for vectorized operations")
 parser.add_argument("--dtype",              type=str,   default='float32',      help='Default dtype')
@@ -62,6 +62,8 @@ from src.Pretraining import HermitePolynomialMatrix, HermitePolynomialMatrixND
 from src.utils import load_dataframe, load_model, count_parameters, get_groundstate
 from src.utils import get_params, sync_time, clip, calc_pretraining_loss
 
+from src.animations import animate_sampler2D
+
 nfermions = args.num_fermions #number of input nodes
 num_hidden = args.num_hidden  #number of hidden nodes per layer
 num_layers = args.num_layers  #number of layers in network
@@ -90,7 +92,7 @@ dimensions=args.dimensions #number of dimensions
 
 
 #define the network
-#torch.manual_seed(42)
+#torch.manual_seed(69)
 net = vLogHarmonicNet(num_input=nfermions,
                       num_hidden=num_hidden,
                       num_layers=num_layers,
@@ -131,7 +133,8 @@ print("Number of parameters: %8i\n" % (count_parameters(net)))
 ###############################################################################################################################################
 #####                                                          DEBUGGING                                                                  #####
 ###############################################################################################################################################
-if debug==True:
+if debug==True and dimensions == 2:
+    #animate_sampler2D(sampler, sweeps=1000)
     def dummy_logpdf(x):
         return -x.pow(2).sum(dim=(-1, -2))
 
@@ -139,7 +142,7 @@ if debug==True:
 
     #sampler.log_pdf = dummy_logpdf
 
-    x, _ = sampler(n_sweeps=1)  # x.shape = [nwalkers, A, D]
+    x, _ = sampler(n_sweeps=n_sweeps)  # x.shape = [nwalkers, A, D]
 
     # Escoge un único fermión (por ejemplo, el primero: índice 0)
     coords = x[:, 0, :]        # [nwalkers, 2] → coordenadas (x, y) del primer fermión
@@ -154,6 +157,62 @@ if debug==True:
     plt.show()
 
 
+
+    # Parámetros del grid
+    grid_range = 5.0      # Rango del espacio (-grid_range, grid_range)
+    grid_size = 100       # Número de puntos en cada dimensión
+    A = 2                 # Número de fermiones (como en tu modelo)
+    D = 2                 # Dimensión espacial (como en tu modelo)
+    nwalkers = grid_size * grid_size  # Número de puntos del grid
+
+    # Crear el grid uniforme
+    x = torch.linspace(-grid_range, grid_range, grid_size)
+    y = torch.linspace(-grid_range, grid_range, grid_size)
+    X, Y = torch.meshgrid(x, y, indexing='ij')
+
+    # Crear el tensor con la estructura de los walkers: [nwalkers, A, D]
+    grid_points = torch.zeros((nwalkers, A, D))
+
+    # Asignar las coordenadas uniformes a un solo fermión (el otro se mantiene fijo en el origen)
+    grid_points[:, 0, 0] = X.flatten()
+    grid_points[:, 0, 1] = Y.flatten()
+    grid_points[:, 1, 0] = 0.0  # Fijar el segundo fermión en el origen
+    grid_points[:, 1, 1] = 0.0  # Fijar el segundo fermión en el origen
+
+    # Evaluar la red neuronal en los puntos del grid
+    net.pretrain = False
+    with torch.no_grad():
+        sign, logabs = net(grid_points.to(device))  # Evaluar la red
+        psi_net = torch.exp(logabs).cpu().numpy()   # |ψ| como numpy array
+
+    # Evaluar la función de onda objetivo en los mismos puntos
+    with torch.no_grad():
+        phi_H = HO(grid_points.to(device))  # Evaluar el objetivo
+        psi_ref = torch.linalg.det(phi_H.squeeze(1)).abs().cpu().numpy()
+
+    # Convertir los resultados a matrices para el heatmap
+    psi_net = psi_net.reshape((grid_size, grid_size))
+    psi_ref = psi_ref.reshape((grid_size, grid_size))
+
+    # Graficar los resultados
+    fig, ax = plt.subplots(1, 2, figsize=(12, 5))
+
+    # Heatmap de la red
+    im1 = ax[0].imshow(psi_net, extent=[-grid_range, grid_range, -grid_range, grid_range], origin='lower', cmap='magma')
+    ax[0].set_title(r'Wave Function Density $|\psi_{\mathrm{net}}|$')
+    ax[0].set_xlabel(r'$x$')
+    ax[0].set_ylabel(r'$y$')
+    plt.colorbar(im1, ax=ax[0], label=r'$|\psi|$')
+
+    # Heatmap de la función de onda objetivo
+    im2 = ax[1].imshow(psi_ref, extent=[-grid_range, grid_range, -grid_range, grid_range], origin='lower', cmap='magma')
+    ax[1].set_title(r'Target Wave Function Density $|\psi_{\mathrm{ref}}|$')
+    ax[1].set_xlabel(r'$x$')
+    ax[1].set_ylabel(r'$y$')
+    plt.colorbar(im2, ax=ax[1], label=r'$|\psi|$')
+
+    plt.tight_layout()
+    plt.show()
 
 
 ###############################################################################################################################################
@@ -295,6 +354,7 @@ if debug==True:
         
     # ── DEBUG VIS – caso bidimensional (A = 2, Dim = 2) ────────────────────────
     if dimensions == 2:
+        
         import matplotlib.pyplot as plt
         net.eval()
 
@@ -361,24 +421,103 @@ if debug==True:
 
         ax.set_aspect('equal', adjustable='box')
         R = max(abs(x1).max(), abs(y1).max())
+        R=4
         ax.set_xlim(-R, R); ax.set_ylim(-R, R)
 
-        cb = fig.colorbar(hb, ax=ax, label=r'$\log_{10}|\psi|^{2}$')
+        #cb = fig.colorbar(hb, ax=ax, label=r'$\log_{10}|\psi|^{2}$')
+        ax.scatter(x1, y1, c='k', s=3, alpha=0.4)
         ax.set_xlabel(r'$x_{1,x}$')
         ax.set_ylabel(r'$x_{1,y}$')
+        
         ax.set_title(r'Densidad $|\psi|^{2}$ – primer fermión (Dim = 2)')
         plt.tight_layout(); plt.show()
+
+            # Parámetros del grid
+        grid_range = 5.0      # Rango del espacio (-grid_range, grid_range)
+        grid_size = 100       # Número de puntos en cada dimensión
+        A = 2                 # Número de fermiones (como en tu modelo)
+        D = 2                 # Dimensión espacial (como en tu modelo)
+        nwalkers = grid_size * grid_size  # Número de puntos del grid
+
+        # Crear el grid uniforme
+        x = torch.linspace(-grid_range, grid_range, grid_size)
+        y = torch.linspace(-grid_range, grid_range, grid_size)
+        X, Y = torch.meshgrid(x, y, indexing='ij')
+
+        # Crear el tensor con la estructura de los walkers: [nwalkers, A, D]
+        grid_points = torch.zeros((nwalkers, A, D))
+
+        # Asignar las coordenadas uniformes a un solo fermión (el otro se mantiene fijo en el origen)
+        grid_points[:, 0, 0] = X.flatten()
+        grid_points[:, 0, 1] = Y.flatten()
+        grid_points[:, 1, 0] = 0.0  # Fijar el segundo fermión en el origen
+        grid_points[:, 1, 1] = 0.0  # Fijar el segundo fermión en el origen
+
+        # Evaluar la red neuronal en los puntos del grid
+        net.pretrain = False
+        with torch.no_grad():
+            sign, logabs = net(grid_points.to(device))  # Evaluar la red
+            psi_net = torch.exp(logabs).cpu().numpy()   # |ψ| como numpy array
+
+        # Evaluar la función de onda objetivo en los mismos puntos
+        with torch.no_grad():
+            phi_H = HO(grid_points.to(device))  # Evaluar el objetivo
+            psi_ref = torch.linalg.det(phi_H.squeeze(1)).abs().cpu().numpy()
+
+        # Convertir los resultados a matrices para el heatmap
+        psi_net = psi_net.reshape((grid_size, grid_size))
+        psi_ref = psi_ref.reshape((grid_size, grid_size))
+
+        # Graficar los resultados
+        fig, ax = plt.subplots(1, 2, figsize=(12, 5))
+
+        # Heatmap de la red
+        im1 = ax[0].imshow(psi_net, extent=[-grid_range, grid_range, -grid_range, grid_range], origin='lower', cmap='magma')
+        ax[0].set_title(r'Wave Function Density after pretraining $|\psi_{\mathrm{net}}|$')
+        ax[0].set_xlabel(r'$x$')
+        ax[0].set_ylabel(r'$y$')
+        plt.colorbar(im1, ax=ax[0], label=r'$|\psi|$')
+
+        # Heatmap de la función de onda objetivo
+        im2 = ax[1].imshow(psi_ref, extent=[-grid_range, grid_range, -grid_range, grid_range], origin='lower', cmap='magma')
+        ax[1].set_title(r'Target Wave Function Density $|\psi_{\mathrm{ref}}|$')
+        ax[1].set_xlabel(r'$x$')
+        ax[1].set_ylabel(r'$y$')
+        plt.colorbar(im2, ax=ax[1], label=r'$|\psi|$')
+
+        plt.tight_layout()
+        plt.show()
+        
         
 
 
 
 
-
-
-
+if debug and dimensions == 2:
+    from src.animations import animate_sampler2D
+    animate_sampler2D(sampler, sweeps=300)
+    #sys.exit()  # 
+#plt.close('all')
 ###############################################################################################################################################
 #####                                           ENERGY-MINIMISATION LOOP                                                                  #####
 ###############################################################################################################################################
+if debug==True:
+    if dimensions==2:
+        #sampler.reset_walkers()
+        x, _ = sampler(n_sweeps=1000)
+        
+
+        # Escoge un único fermión (por ejemplo, el primero: índice 0)
+        coords = x[:, 0, :]        # [nwalkers, 2] → coordenadas (x, y) del primer fermión
+        x1, y1 = coords[:, 0].cpu(), coords[:, 1].cpu()
+
+        plt.figure(figsize=(6,6))
+        plt.scatter(x1, y1, s=3, alpha=0.4)
+        plt.xlabel(r'$x$'); plt.ylabel(r'$y$')
+        plt.title('Distribución inicial de walkers – primer fermión')
+        plt.axis('equal')
+        plt.tight_layout()
+        plt.show()
 
 net.pretrain = False #this argument is needed in order to change the network into the energy minimisation mode
 optim = torch.optim.Adam(params=net.parameters(), lr=1e-4) #new optimizer
@@ -411,9 +550,9 @@ for epoch in progress_bar:
     x, _ = sampler(n_sweeps) #sample illustrating the wavefunction of the network
     #print(x.shape)
     elocal, _kin, _potential, _inter = calc_elocal(x) #compute the local energy
-    elocal_clipped = clip(elocal, clip_factor=5) #clip the local energy
-    print(elocal)
-    print(elocal_clipped)
+    elocal_clipped = clip(elocal, clip_factor=5) #clip the local energy clip factor 5
+    #print(elocal)
+    #print(elocal_clipped)
     _, logabs = net(x) #compute the global logabs values of Generalised Slater Matrices of the network
 
     loss_elocal = 2.*((elocal - torch.mean(elocal)).detach() * logabs)
@@ -533,6 +672,86 @@ if debug==True:
             plt.title('Wave function 1D of fermions after training')
             plt.tight_layout()
             plt.show()
+if debug==True and dimensions == 2:
+    def dummy_logpdf(x):
+        return -x.pow(2).sum(dim=(-1, -2))
+
+    import matplotlib.pyplot as plt
+
+    #sampler.log_pdf = dummy_logpdf
+
+    x, _ = sampler(n_sweeps=1000)  # x.shape = [nwalkers, A, D]
+
+    # Escoge un único fermión (por ejemplo, el primero: índice 0)
+    coords = x[:, 0, :]        # [nwalkers, 2] → coordenadas (x, y) del primer fermión
+    x1, y1 = coords[:, 0].cpu(), coords[:, 1].cpu()
+
+    plt.figure(figsize=(6,6))
+    plt.scatter(x1, y1, s=3, alpha=0.4)
+    plt.xlabel(r'$x$'); plt.ylabel(r'$y$')
+    plt.title('Distribución inicial de walkers – primer fermión')
+    plt.axis('equal')
+    plt.tight_layout()
+    plt.show()
+
+
+
+    # Parámetros del grid
+    grid_range = 5.0      # Rango del espacio (-grid_range, grid_range)
+    grid_size = 100       # Número de puntos en cada dimensión
+    A = 2                 # Número de fermiones (como en tu modelo)
+    D = 2                 # Dimensión espacial (como en tu modelo)
+    nwalkers = grid_size * grid_size  # Número de puntos del grid
+
+    # Crear el grid uniforme
+    x = torch.linspace(-grid_range, grid_range, grid_size)
+    y = torch.linspace(-grid_range, grid_range, grid_size)
+    X, Y = torch.meshgrid(x, y, indexing='ij')
+
+    # Crear el tensor con la estructura de los walkers: [nwalkers, A, D]
+    grid_points = torch.zeros((nwalkers, A, D))
+
+    # Asignar las coordenadas uniformes a un solo fermión (el otro se mantiene fijo en el origen)
+    grid_points[:, 0, 0] = X.flatten()
+    grid_points[:, 0, 1] = Y.flatten()
+    grid_points[:, 1, 0] = 0.0  # Fijar el segundo fermión en el origen
+    grid_points[:, 1, 1] = 0.0  # Fijar el segundo fermión en el origen
+
+    # Evaluar la red neuronal en los puntos del grid
+    net.pretrain = False
+    with torch.no_grad():
+        sign, logabs = net(grid_points.to(device))  # Evaluar la red
+        psi_net = torch.exp(logabs).cpu().numpy()   # |ψ| como numpy array
+
+    # Evaluar la función de onda objetivo en los mismos puntos
+    with torch.no_grad():
+        phi_H = HO(grid_points.to(device))  # Evaluar el objetivo
+        psi_ref = torch.linalg.det(phi_H.squeeze(1)).abs().cpu().numpy()
+
+    # Convertir los resultados a matrices para el heatmap
+    psi_net = psi_net.reshape((grid_size, grid_size))
+    psi_ref = psi_ref.reshape((grid_size, grid_size))
+
+    # Graficar los resultados
+    fig, ax = plt.subplots(1, 2, figsize=(12, 5))
+
+    # Heatmap de la red
+    im1 = ax[0].imshow(psi_net, extent=[-grid_range, grid_range, -grid_range, grid_range], origin='lower', cmap='magma')
+    ax[0].set_title(r'Wave Function Density $|\psi_{\mathrm{net}}|$')
+    ax[0].set_xlabel(r'$x$')
+    ax[0].set_ylabel(r'$y$')
+    plt.colorbar(im1, ax=ax[0], label=r'$|\psi|$')
+
+    # Heatmap de la función de onda objetivo
+    im2 = ax[1].imshow(psi_ref, extent=[-grid_range, grid_range, -grid_range, grid_range], origin='lower', cmap='magma')
+    ax[1].set_title(r'Target Wave Function Density $|\psi_{\mathrm{ref}}|$')
+    ax[1].set_xlabel(r'$x$')
+    ax[1].set_ylabel(r'$y$')
+    plt.colorbar(im2, ax=ax[1], label=r'$|\psi|$')
+
+    plt.tight_layout()
+    plt.show()
+
 
 ###############################################################################################################################################
 #####                                               FINAL MODEL EVALUATION                                                                #####
