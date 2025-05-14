@@ -139,7 +139,7 @@ if debug==True and dimensions == 2:
         return -x.pow(2).sum(dim=(-1, -2))
 
     import matplotlib.pyplot as plt
-
+    #matplotlib.use('TkAgg')
     #sampler.log_pdf = dummy_logpdf
 
     x, _ = sampler(n_sweeps=n_sweeps)  # x.shape = [nwalkers, A, D]
@@ -355,7 +355,7 @@ if debug==True:
     # ── DEBUG VIS – caso bidimensional (A = 2, Dim = 2) ────────────────────────
     if dimensions == 2:
         
-        import matplotlib.pyplot as plt
+        
         net.eval()
 
         # ==============================================================
@@ -494,7 +494,7 @@ if debug==True:
 
 
 if debug and dimensions == 2:
-    from src.animations import animate_sampler2D
+    
     animate_sampler2D(sampler, sweeps=300)
     #sys.exit()  # 
 #plt.close('all')
@@ -504,7 +504,7 @@ if debug and dimensions == 2:
 if debug==True:
     if dimensions==2:
         #sampler.reset_walkers()
-        x, _ = sampler(n_sweeps=1000)
+        x, _ = sampler(n_sweeps=100)
         
 
         # Escoge un único fermión (por ejemplo, el primero: índice 0)
@@ -625,7 +625,7 @@ from src.utils import generate_final_energy, round_to_err, str_with_err
 # ── Plot de validación tras el training (solo 1-D) ────────────────────────
 if debug==True:
     if dimensions == 1:
-        import matplotlib.pyplot as plt
+        
 
         net.eval();  net.pretrain = True           # red en modo pre-training
 
@@ -676,7 +676,7 @@ if debug==True and dimensions == 2:
     def dummy_logpdf(x):
         return -x.pow(2).sum(dim=(-1, -2))
 
-    import matplotlib.pyplot as plt
+    
 
     #sampler.log_pdf = dummy_logpdf
 
