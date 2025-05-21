@@ -55,7 +55,7 @@ DIR='./'
 sys.path.append(DIR+"src/")
 
 from src.Models import vLogHarmonicNet
-from src.Samplers import MetropolisHastings
+from src.Samplers import MetropolisHastings,MetropolisHastingsOld
 from src.Hamiltonian import HarmonicOscillatorWithInteractionD as HOwD
 from src.Pretraining import HermitePolynomialMatrix, HermitePolynomialMatrixND 
 
@@ -75,7 +75,7 @@ debug = args.debug #debug mode
 nwalkers=4096 #number of walkers in the Metropolis
 n_sweeps=10 #n_discard
 std=1.#0.02#1.
-target_acceptance=0.5 #target acceptance rate 0.5
+target_acceptance=0.6 #target acceptance rate 0.5
 
 V0 = args.V0 #interaction strength
 sigma0 = args.sigma0 #interaction distance
@@ -104,7 +104,7 @@ net=net.to(device)
 
 #set the sampler, returns the chains and the log_prob
 #torch.manual_seed(42)
-sampler = MetropolisHastings(network=net,
+sampler = MetropolisHastingsOld(network=net,
                              dof=nfermions,
                              nwalkers=nwalkers,
                              target_acceptance=target_acceptance,
@@ -118,7 +118,7 @@ calc_elocal = HOwD(net=net, V0=V0, sigma0=sigma0, nchunks=nchunks, dimensions= d
 HO = HermitePolynomialMatrixND(num_particles=nfermions,Dim=dimensions) #target wavefunction for pretraining #cambiar estos #modified
 
 #set the optimizer
-optim = torch.optim.Adam(params=net.parameters(), lr=1e-4) 
+optim = torch.optim.Adam(params=net.parameters(), lr=1e-5) 
 
 
 gs_CI = get_groundstate(A=nfermions, V0=V0, datapath="groundstate/")#get the analytical groundstate from the groundstate folder
@@ -134,7 +134,7 @@ print("Number of parameters: %8i\n" % (count_parameters(net)))
 #####                                                          DEBUGGING                                                                  #####
 ###############################################################################################################################################
 if debug==True and dimensions == 2:
-    #animate_sampler2D(sampler, sweeps=1000)
+    animate_sampler2D(sampler, sweeps=300)
     def dummy_logpdf(x):
         return -x.pow(2).sum(dim=(-1, -2))
 
@@ -159,7 +159,7 @@ if debug==True and dimensions == 2:
 
 
     # Parámetros del grid
-    grid_range = 5.0      # Rango del espacio (-grid_range, grid_range)
+    grid_range = 10.0      # Rango del espacio (-grid_range, grid_range)
     grid_size = 100       # Número de puntos en cada dimensión
     A = 2                 # Número de fermiones (como en tu modelo)
     D = 2                 # Dimensión espacial (como en tu modelo)
@@ -213,7 +213,9 @@ if debug==True and dimensions == 2:
 
     plt.tight_layout()
     plt.show()
-
+    #x, _ = sampler(n_sweeps=n_sweeps)
+    #print(f"The shape of the target orbitals is {HO(x).shape}")
+    #print(f"The orbitals are {HO(x)}")
 
 ###############################################################################################################################################
 #####                                           PRE-TRAINING LOOP                                                                         #####
@@ -326,7 +328,6 @@ if debug==True:
         plt.tight_layout()
         plt.show()
 
-        net.eval()
         net.pretrain = False          # estamos en fase de minimizado de energía
 
         with torch.no_grad():
@@ -350,12 +351,45 @@ if debug==True:
             plt.title('Wave function 1D of fermions after pretraining')
             plt.tight_layout()
             plt.show()
-
+        net.train()
         
     # ── DEBUG VIS – caso bidimensional (A = 2, Dim = 2) ────────────────────────
     if dimensions == 2:
-        
-        
+        # justo al terminar el pre-training:
+        net.pretrain = False
+        net.eval()
+        grid_range = 5.0
+        grid_size = 100
+        A = sampler.dof
+        D = sampler.dim
+        nwalkers = grid_size * grid_size
+
+        xg = torch.linspace(-grid_range, grid_range, grid_size)
+        yg = torch.linspace(-grid_range, grid_range, grid_size)
+        X, Y = torch.meshgrid(xg, yg, indexing='ij')
+
+        grid_points = torch.zeros((nwalkers, A, D))
+        grid_points[:, 0, 0] = X.flatten()
+        grid_points[:, 0, 1] = Y.flatten()
+        grid_points[:, 1, 0] = 0.0
+        grid_points[:, 1, 1] = 0.0
+
+        input_tensor = grid_points.to(device)
+        # mismo slice que la animación
+        net.eval()
+        net.pretrain = True                               # <- modo matriz
+
+        with torch.no_grad():
+            phi_N = net(input_tensor)                     # [N,1,A,A]
+            psi_N = torch.linalg.det(phi_N.squeeze(1)).abs()
+            logabs_net = psi_N.log()
+
+        phi_H = HO(input_tensor)                          # matriz exacta
+        psi_H = torch.linalg.det(phi_H.squeeze(1)).abs()
+        logabs_ref = psi_H.log()
+
+        rmse = ((logabs_net - logabs_ref)**2).mean().sqrt()
+        print("RMSE real:", rmse)
         net.eval()
 
         # ==============================================================
@@ -421,7 +455,6 @@ if debug==True:
 
         ax.set_aspect('equal', adjustable='box')
         R = max(abs(x1).max(), abs(y1).max())
-        R=4
         ax.set_xlim(-R, R); ax.set_ylim(-R, R)
 
         #cb = fig.colorbar(hb, ax=ax, label=r'$\log_{10}|\psi|^{2}$')
@@ -433,7 +466,7 @@ if debug==True:
         plt.tight_layout(); plt.show()
 
             # Parámetros del grid
-        grid_range = 5.0      # Rango del espacio (-grid_range, grid_range)
+        #grid_range = 5.0      # Rango del espacio (-grid_range, grid_range)
         grid_size = 100       # Número de puntos en cada dimensión
         A = 2                 # Número de fermiones (como en tu modelo)
         D = 2                 # Dimensión espacial (como en tu modelo)
@@ -487,14 +520,33 @@ if debug==True:
 
         plt.tight_layout()
         plt.show()
-        
+        # ==============================================================  
+        # 3. Distribución de walkers después del pretraining (solo primer fermión)  
+        # ==============================================================  
+        with torch.no_grad():
+            x_sampled, _ = sampler(n_sweeps=1000)  # nuevos walkers según la red ya preentrenada
+            coords = x_sampled[:, 0, :]  # primer fermión
+            x1 = coords[:, 0].cpu()
+            y1 = coords[:, 1].cpu()
+
+        fig, ax = plt.subplots(figsize=(6,6))
+        ax.scatter(x1, y1, s=3, alpha=0.4, color='blue')
+        ax.set_aspect('equal', adjustable='box')
+        ax.set_xlim(-grid_range, grid_range)
+        ax.set_ylim(-grid_range, grid_range)
+        ax.set_title('Distribución de walkers tras pretraining – primer fermión')
+        ax.set_xlabel(r'$x_1$')
+        ax.set_ylabel(r'$y_1$')
+        plt.tight_layout()
+        plt.show()
+
+        net.train()
         
 
 
 
 
 if debug and dimensions == 2:
-    
     animate_sampler2D(sampler, sweeps=300)
     #sys.exit()  # 
 #plt.close('all')
@@ -503,7 +555,7 @@ if debug and dimensions == 2:
 ###############################################################################################################################################
 if debug==True:
     if dimensions==2:
-        #sampler.reset_walkers()
+        sampler.reset_walkers()
         x, _ = sampler(n_sweeps=100)
         
 
@@ -518,6 +570,10 @@ if debug==True:
         plt.axis('equal')
         plt.tight_layout()
         plt.show()
+
+sampler.reset_walkers() #reset the walkers
+x, _ = sampler(n_sweeps=100)
+
 
 net.pretrain = False #this argument is needed in order to change the network into the energy minimisation mode
 optim = torch.optim.Adam(params=net.parameters(), lr=1e-4) #new optimizer
@@ -555,10 +611,10 @@ for epoch in progress_bar:
     #print(elocal_clipped)
     _, logabs = net(x) #compute the global logabs values of Generalised Slater Matrices of the network
 
-    loss_elocal = 2.*((elocal - torch.mean(elocal)).detach() * logabs)
+    loss_elocal = 2.*((elocal_clipped - torch.mean(elocal_clipped)).detach() * logabs)
     
     with torch.no_grad():
-        energy_var, energy_mean = torch.var_mean(elocal, unbiased=True) #compute the variance and the mean of the local energy
+        energy_var, energy_mean = torch.var_mean(elocal_clipped, unbiased=True) #compute the variance and the mean of the local energy
         energy_std = (energy_var / nwalkers).sqrt() #compute the standard deviation of the local energy
 
     loss=torch.mean(loss_elocal)    #loss function
@@ -672,78 +728,66 @@ if debug==True:
             plt.title('Wave function 1D of fermions after training')
             plt.tight_layout()
             plt.show()
+        net.train()
 if debug==True and dimensions == 2:
-    def dummy_logpdf(x):
-        return -x.pow(2).sum(dim=(-1, -2))
+    net.eval()
+    # === 1. Muestrea muchos walkers después del pretraining ===
+    with torch.no_grad():
+        x, _ = sampler(n_sweeps=1000)  # muestra tras pretraining
 
-    
-
-    #sampler.log_pdf = dummy_logpdf
-
-    x, _ = sampler(n_sweeps=1000)  # x.shape = [nwalkers, A, D]
-
-    # Escoge un único fermión (por ejemplo, el primero: índice 0)
-    coords = x[:, 0, :]        # [nwalkers, 2] → coordenadas (x, y) del primer fermión
+    coords = x[:, 0, :]        # [nwalkers, 2] → primer fermión
     x1, y1 = coords[:, 0].cpu(), coords[:, 1].cpu()
 
-    plt.figure(figsize=(6,6))
-    plt.scatter(x1, y1, s=3, alpha=0.4)
+    # === 2. Histograma de walkers ===
+    plt.figure(figsize=(6, 6))
+    plt.hist2d(x1, y1, bins=100, range=[[-4, 4], [-4, 4]], cmap='magma')
     plt.xlabel(r'$x$'); plt.ylabel(r'$y$')
-    plt.title('Distribución inicial de walkers – primer fermión')
+    plt.title('Distribución de walkers – primer fermión')
     plt.axis('equal')
+    plt.colorbar(label='Nº de walkers')
     plt.tight_layout()
     plt.show()
 
+    # === 3. Densidad aprendida y objetivo ===
+    grid_range = 5.0
+    grid_size = 100
+    A = sampler.dof
+    D = sampler.dim
+    nwalkers = grid_size * grid_size
 
+    xg = torch.linspace(-grid_range, grid_range, grid_size)
+    yg = torch.linspace(-grid_range, grid_range, grid_size)
+    X, Y = torch.meshgrid(xg, yg, indexing='ij')
 
-    # Parámetros del grid
-    grid_range = 5.0      # Rango del espacio (-grid_range, grid_range)
-    grid_size = 100       # Número de puntos en cada dimensión
-    A = 2                 # Número de fermiones (como en tu modelo)
-    D = 2                 # Dimensión espacial (como en tu modelo)
-    nwalkers = grid_size * grid_size  # Número de puntos del grid
-
-    # Crear el grid uniforme
-    x = torch.linspace(-grid_range, grid_range, grid_size)
-    y = torch.linspace(-grid_range, grid_range, grid_size)
-    X, Y = torch.meshgrid(x, y, indexing='ij')
-
-    # Crear el tensor con la estructura de los walkers: [nwalkers, A, D]
     grid_points = torch.zeros((nwalkers, A, D))
-
-    # Asignar las coordenadas uniformes a un solo fermión (el otro se mantiene fijo en el origen)
     grid_points[:, 0, 0] = X.flatten()
     grid_points[:, 0, 1] = Y.flatten()
-    grid_points[:, 1, 0] = 0.0  # Fijar el segundo fermión en el origen
-    grid_points[:, 1, 1] = 0.0  # Fijar el segundo fermión en el origen
+    grid_points[:, 1, 0] = 0.0
+    grid_points[:, 1, 1] = 0.0
 
-    # Evaluar la red neuronal en los puntos del grid
+    input_tensor = grid_points.to(device)
+
+    
+
     net.pretrain = False
     with torch.no_grad():
-        sign, logabs = net(grid_points.to(device))  # Evaluar la red
-        psi_net = torch.exp(logabs).cpu().numpy()   # |ψ| como numpy array
+        _, logabs = net(input_tensor)
+        psi_net = torch.exp(logabs).cpu().reshape(grid_size, grid_size)
 
-    # Evaluar la función de onda objetivo en los mismos puntos
-    with torch.no_grad():
-        phi_H = HO(grid_points.to(device))  # Evaluar el objetivo
-        psi_ref = torch.linalg.det(phi_H.squeeze(1)).abs().cpu().numpy()
+        phi_H = HO(input_tensor)
+        psi_ref = torch.linalg.det(phi_H.squeeze(1)).abs().cpu().reshape(grid_size, grid_size)
 
-    # Convertir los resultados a matrices para el heatmap
-    psi_net = psi_net.reshape((grid_size, grid_size))
-    psi_ref = psi_ref.reshape((grid_size, grid_size))
-
-    # Graficar los resultados
     fig, ax = plt.subplots(1, 2, figsize=(12, 5))
 
-    # Heatmap de la red
-    im1 = ax[0].imshow(psi_net, extent=[-grid_range, grid_range, -grid_range, grid_range], origin='lower', cmap='magma')
+    im1 = ax[0].imshow(psi_net, extent=[-grid_range, grid_range, -grid_range, grid_range],
+                       origin='lower', cmap='magma')
     ax[0].set_title(r'Wave Function Density $|\psi_{\mathrm{net}}|$')
     ax[0].set_xlabel(r'$x$')
     ax[0].set_ylabel(r'$y$')
     plt.colorbar(im1, ax=ax[0], label=r'$|\psi|$')
 
-    # Heatmap de la función de onda objetivo
-    im2 = ax[1].imshow(psi_ref, extent=[-grid_range, grid_range, -grid_range, grid_range], origin='lower', cmap='magma')
+    im2 = ax[1].imshow(psi_ref, extent=[-grid_range, grid_range, -grid_range, grid_range],
+                       origin='lower', cmap='magma')
     ax[1].set_title(r'Target Wave Function Density $|\psi_{\mathrm{ref}}|$')
     ax[1].set_xlabel(r'$x$')
     ax[1].set_ylabel(r'$y$')
@@ -751,8 +795,11 @@ if debug==True and dimensions == 2:
 
     plt.tight_layout()
     plt.show()
-
-
+    net.train()
+    
+        
+if debug and dimensions == 2:
+    animate_sampler2D(sampler, sweeps=300)
 ###############################################################################################################################################
 #####                                               FINAL MODEL EVALUATION                                                                #####
 ###############################################################################################################################################

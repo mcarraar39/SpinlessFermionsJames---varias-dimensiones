@@ -6,7 +6,7 @@ from typing import Callable, Tuple
 
 from Layers import EquivariantLayer, SlaterMultiDet, LogEnvelope, MatrixToSLogDeterminant,EquivariantLayer0,EquivariantLayer1,EquivariantLayer2,EquivariantLayer3,EquivariantLayer4
 
-class vLogHarmonicNet(nn.Module):
+class vLogHarmonicNetNew(nn.Module):
 
     def __init__(self, num_input: int, num_hidden: int, num_layers: int, num_dets: int, func: nn.Module, pretrain: bool, Dim: int):
         """Permutational Equivariant Neural Network which takes the one-dimensional positions
@@ -116,7 +116,7 @@ class vLogHarmonicNet(nn.Module):
             sign, logabsdet = self.slog_slater_det(matrices, log_envs)
             return sign, logabsdet
         
-class vLogHarmonicNetOld(nn.Module):
+class vLogHarmonicNet(nn.Module):
 
     def __init__(self, num_input: int, num_hidden: int, num_layers: int, num_dets: int, func: nn.Module, pretrain: bool, Dim: int):
         """Permutational Equivariant Neural Network which takes the one-dimensional positions
