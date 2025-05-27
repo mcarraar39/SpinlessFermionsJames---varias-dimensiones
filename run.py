@@ -23,7 +23,7 @@ parser.add_argument("--epochs",             type=int,   default=10000, help="Num
 parser.add_argument("-C", "--chunks",       type=int,   default=1,     help="Number of chunks for vectorized operations")
 parser.add_argument("--dtype",              type=str,   default='float32',      help='Default dtype')
 parser.add_argument("-Dim", "--dimensions", type=int,   default=2,     help="Number of dimensions of the physical system")
-parser.add_argument("--debug", type=bool,  default=True, help="Debug mode")
+#parser.add_argument("--debug", type=bool,  default=True, help="Debug mode")
 
 args = parser.parse_args()
 
@@ -63,6 +63,7 @@ from src.utils import load_dataframe, load_model, count_parameters, get_groundst
 from src.utils import get_params, sync_time, clip, calc_pretraining_loss
 
 from src.animations import animate_sampler2D
+from tests.MC_energy_stability import run_energy_stability_check
 
 nfermions = args.num_fermions #number of input nodes
 num_hidden = args.num_hidden  #number of hidden nodes per layer
@@ -70,12 +71,12 @@ num_layers = args.num_layers  #number of layers in network
 num_dets = args.num_dets      #number of determinants (accepts arb. value)
 func = nn.Tanh()  #activation function between layers
 pretrain = True   #command to pretrain the network
-debug = args.debug #debug mode
+debug = True #debug mode
 
-nwalkers=4096 #number of walkers in the Metropolis
-n_sweeps=10 #n_discard
+nwalkers=4096#number of walkers in the Metropolis 4096
+n_sweeps=100 #n_discard
 std=1.#0.02#1.
-target_acceptance=0.6 #target acceptance rate 0.5
+target_acceptance=0.55 #target acceptance rate 0.5
 
 V0 = args.V0 #interaction strength
 sigma0 = args.sigma0 #interaction distance
@@ -118,7 +119,7 @@ calc_elocal = HOwD(net=net, V0=V0, sigma0=sigma0, nchunks=nchunks, dimensions= d
 HO = HermitePolynomialMatrixND(num_particles=nfermions,Dim=dimensions) #target wavefunction for pretraining #cambiar estos #modified
 
 #set the optimizer
-optim = torch.optim.Adam(params=net.parameters(), lr=1e-5) 
+optim = torch.optim.Adam(params=net.parameters(), lr=1e-4) 
 
 
 gs_CI = get_groundstate(A=nfermions, V0=V0, datapath="groundstate/")#get the analytical groundstate from the groundstate folder
@@ -134,7 +135,7 @@ print("Number of parameters: %8i\n" % (count_parameters(net)))
 #####                                                          DEBUGGING                                                                  #####
 ###############################################################################################################################################
 if debug==True and dimensions == 2:
-    animate_sampler2D(sampler, sweeps=300)
+    #animate_sampler2D(sampler, sweeps=300)
     def dummy_logpdf(x):
         return -x.pow(2).sum(dim=(-1, -2))
 
@@ -302,6 +303,14 @@ print("\n")
 #####################################################################################################################################
 #####                                                   Debugging                                                                    #####
 ##########################################################################################################################################
+if debug==True and dimensions == 2:
+    pretrain_register = net.pretrain
+    net.pretrain = False  # set pretrain to False for energy minimization
+    #sampler.reset_walkers()  # reset the walkers to start fresh
+    run_energy_stability_check(net, sampler, calc_elocal, device)
+    net.pretrain = pretrain_register  # restore pretrain mode
+
+
 # ── Plot de validación tras el pre-training (solo 1-D) ────────────────────────
 if debug==True:
     if dimensions == 1:
@@ -540,6 +549,26 @@ if debug==True:
         plt.tight_layout()
         plt.show()
 
+        # ──  |ψ|² de la red con pretrain=False sobre el grid ya creado ──────────────
+        net.eval()
+        net.pretrain = False          # ahora devuelve el determinante
+
+        with torch.no_grad():
+            _, logabs = net(input_tensor)        # input_tensor viene del grid previo
+            psi2_net  = torch.exp(2 * logabs)    # |ψ|²
+
+        psi2_net = psi2_net.cpu().reshape(grid_size, grid_size)
+
+        # ── gráfico ─────────────────────────────────────────────────────────────────
+        plt.figure(figsize=(5.5, 5))
+        plt.imshow(psi2_net,
+                extent=[-grid_range, grid_range, -grid_range, grid_range],
+                origin='lower', cmap='magma')
+        plt.title(r'$|\psi_{\mathrm{net}}(x_1,y_1;0,0)|^{2}$  (pretrain=False)')
+        plt.xlabel(r'$x_1$');  plt.ylabel(r'$y_1$')
+        plt.colorbar(label=r'$|\psi|^{2}$')
+        plt.tight_layout();  plt.show()
+
         net.train()
         
 
@@ -606,15 +635,15 @@ for epoch in progress_bar:
     x, _ = sampler(n_sweeps) #sample illustrating the wavefunction of the network
     #print(x.shape)
     elocal, _kin, _potential, _inter = calc_elocal(x) #compute the local energy
-    elocal_clipped = clip(elocal, clip_factor=5) #clip the local energy clip factor 5
+    elocal = clip(elocal, clip_factor=5) #clip the local energy clip factor 5
     #print(elocal)
     #print(elocal_clipped)
     _, logabs = net(x) #compute the global logabs values of Generalised Slater Matrices of the network
 
-    loss_elocal = 2.*((elocal_clipped - torch.mean(elocal_clipped)).detach() * logabs)
+    loss_elocal = 2.*((elocal - torch.mean(elocal)).detach() * logabs)
     
     with torch.no_grad():
-        energy_var, energy_mean = torch.var_mean(elocal_clipped, unbiased=True) #compute the variance and the mean of the local energy
+        energy_var, energy_mean = torch.var_mean(elocal, unbiased=True) #compute the variance and the mean of the local energy
         energy_std = (energy_var / nwalkers).sqrt() #compute the standard deviation of the local energy
 
     loss=torch.mean(loss_elocal)    #loss function
