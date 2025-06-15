@@ -46,6 +46,7 @@ def clip(elocal: Tensor, clip_factor: int):
     median = elocal.median()
     variation = torch.mean( torch.abs(elocal - median) )
     window = clip_factor*variation
+    print(f"Clipping local energy values to [{median-window:.4f}, {median+window:.4f}]")
     minima, maxima = (median-window).item(), (median+window).item()
     return torch.clip(elocal, minima, maxima)
 

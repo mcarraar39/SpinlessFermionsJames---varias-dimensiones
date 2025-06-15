@@ -398,7 +398,11 @@ class LogEnvelope(nn.Module):
     :param x0: Input positions of shape [A, D]
     :return: Output tensor of shape [num_dets, A, num_particles]
     """
+    
     envs = torch.stack([layer(x0).pow(2).sum(dim=-1, keepdim=True) for layer in self.log_envs], dim=-3)
+    # for i, layer in enumerate(self.log_envs):
+    #   print(f"Weights for determinant {i}:")
+    #   print(layer.weight)  # Shape: [num_particles, dim]
     return envs.mul(-1)
 
 class LogEnvelopeOld(nn.Module):

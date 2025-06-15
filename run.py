@@ -12,14 +12,14 @@ parser = argparse.ArgumentParser(prog="SpinlessFermions",
                                  epilog="and fin")
 #https://stackoverflow.com/questions/14117415/in-python-using-argparse-allow-only-positive-integers/14117567
 
-parser.add_argument("-N", "--num_fermions", type=int,   default=2,     help="Number of fermions in physical system")
+parser.add_argument("-N", "--num_fermions", type=int,   default=3,     help="Number of fermions in physical system")
 parser.add_argument("-H", "--num_hidden",   type=int,   default=64,    help="Number of hidden neurons per layer")#64
 parser.add_argument("-L", "--num_layers",   type=int,   default=2,     help="Number of layers within the network")
 parser.add_argument("-D", "--num_dets",     type=int,   default=1,     help="Number of determinants within the network's final layer")
 parser.add_argument("-V", "--V0",           type=float, default=0.,    help="Interaction strength (in harmonic units)")
 parser.add_argument("-S", "--sigma0",       type=float, default=0.5,   help="Interaction distance (in harmonic units")
 parser.add_argument("--preepochs",          type=int,   default=5000, help="Number of pre-epochs for the pretraining phase")
-parser.add_argument("--epochs",             type=int,   default=10000, help="Number of epochs for the energy minimisation phase")
+parser.add_argument("--epochs",             type=int,   default=5000, help="Number of epochs for the energy minimisation phase")
 parser.add_argument("-C", "--chunks",       type=int,   default=1,     help="Number of chunks for vectorized operations")
 parser.add_argument("--dtype",              type=str,   default='float32',      help='Default dtype')
 parser.add_argument("-Dim", "--dimensions", type=int,   default=2,     help="Number of dimensions of the physical system")
@@ -55,7 +55,7 @@ DIR='./'
 sys.path.append(DIR+"src/")
 
 from src.Models import vLogHarmonicNet
-from src.Samplers import MetropolisHastings,MetropolisHastingsOld
+from src.Samplers import MetropolisHastings,MetropolisHastingsOld,MetropolisHastings_Boundary,MetropolisHastings_2D,MetropolisHastings_2,MetropolisHastings_sigma,MetropolisHastings_envelope
 from src.Hamiltonian import HarmonicOscillatorWithInteractionD as HOwD
 from src.Pretraining import HermitePolynomialMatrix, HermitePolynomialMatrixND 
 
@@ -65,16 +65,17 @@ from src.utils import get_params, sync_time, clip, calc_pretraining_loss
 from src.animations import animate_sampler2D
 from tests.MC_energy_stability import run_energy_stability_check
 
+
 nfermions = args.num_fermions #number of input nodes
 num_hidden = args.num_hidden  #number of hidden nodes per layer
 num_layers = args.num_layers  #number of layers in network
 num_dets = args.num_dets      #number of determinants (accepts arb. value)
 func = nn.Tanh()  #activation function between layers
 pretrain = True   #command to pretrain the network
-debug = True #debug mode
+debug = False #debug mode
 
-nwalkers=4096#number of walkers in the Metropolis 4096
-n_sweeps=100 #n_discard
+nwalkers=10096#number of walkers in the Metropolis 4096
+n_sweeps=10 #n_discard
 std=1.#0.02#1.
 target_acceptance=0.55 #target acceptance rate 0.5
 
@@ -103,9 +104,14 @@ net = vLogHarmonicNet(num_input=nfermions,
                       Dim=dimensions) #modified
 net=net.to(device)
 
+#Let's try not updating the log envelope
+# for param in net.log_envelope.parameters():
+#         param.requires_grad = False
+
+
 #set the sampler, returns the chains and the log_prob
 #torch.manual_seed(42)
-sampler = MetropolisHastingsOld(network=net,
+sampler = MetropolisHastings_envelope(network=net,
                              dof=nfermions,
                              nwalkers=nwalkers,
                              target_acceptance=target_acceptance,
@@ -303,7 +309,11 @@ print("\n")
 #####################################################################################################################################
 #####                                                   Debugging                                                                    #####
 ##########################################################################################################################################
-if debug==True and dimensions == 2:
+
+
+
+
+if debug==True and (dimensions == 2 or dimensions == 3):
     pretrain_register = net.pretrain
     net.pretrain = False  # set pretrain to False for energy minimization
     #sampler.reset_walkers()  # reset the walkers to start fresh
@@ -600,12 +610,16 @@ if debug==True:
         plt.tight_layout()
         plt.show()
 
-sampler.reset_walkers() #reset the walkers
-x, _ = sampler(n_sweeps=100)
+    sampler.reset_walkers() #reset the walkers
+    x, _ = sampler(n_sweeps=100)
 
 
 net.pretrain = False #this argument is needed in order to change the network into the energy minimisation mode
 optim = torch.optim.Adam(params=net.parameters(), lr=1e-4) #new optimizer
+
+#sampler.reset_walkers() #reset the walkers
+#x, _ = sampler(n_sweeps=1000)
+
 
 model_path = DIR+"results/energy/checkpoints/A%02i_H%03i_L%02i_D%02i_%s_W%04i_P%06i_V%4.4e_S%4.4e_%s_PT_%s_device_%s_dtype_%s_dim_%02i_chkp.pt" % \
                 (nfermions, num_hidden, num_layers, num_dets, func.__class__.__name__, nwalkers, preepochs, V0, sigma0, \
@@ -687,6 +701,8 @@ for epoch in progress_bar:
                     'sigma':sampler.sigma},
                     model_path)
         writer.write_to_file(filename)
+        #sampler.reset_walkers() #reset the walkers
+        #x, _ = sampler(n_sweeps=1000)
 
     #sys.stdout.write("Epoch: %6i | Energy: %6.4f +/- %6.4f | CI: %6.4f | Walltime: %4.2e (s)        \r" % (epoch, energy_mean, energy_std, gs_CI, end-start))
     #sys.stdout.flush()
@@ -707,6 +723,14 @@ from src.utils import generate_final_energy, round_to_err, str_with_err
 #####################################################################################################################################
 #####                                                   Debugging                                                                    #####
 ##########################################################################################################################################
+if debug==True and (dimensions == 2 or dimensions == 3):
+    pretrain_register = net.pretrain
+    net.pretrain = False  # set pretrain to False for energy minimization
+    #sampler.reset_walkers()  # reset the walkers to start fresh
+    run_energy_stability_check(net, sampler, calc_elocal, device)
+    net.pretrain = pretrain_register  # restore pretrain mode
+
+
 # ── Plot de validación tras el training (solo 1-D) ────────────────────────
 if debug==True:
     if dimensions == 1:

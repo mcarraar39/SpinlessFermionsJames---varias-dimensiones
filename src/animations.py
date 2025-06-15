@@ -5,7 +5,7 @@ from datetime import datetime
 import shutil
 import os
 
-def animate_sampler2D(sampler, sweeps: int = 100, grid_range: float = 20.0, grid_size: int = 100, save: bool = True):
+def animate_sampler2D(sampler, sweeps: int = 100, grid_range: float = 4.0, grid_size: int = 100, save: bool = False):
     """
     Visualize the walkers of the first fermion with the wavefunction of the network in the background.
     """

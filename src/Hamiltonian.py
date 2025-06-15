@@ -3,6 +3,12 @@ from torch import nn, Tensor
 from typing import Tuple
 
 import numpy as np
+
+
+
+
+
+
 class HarmonicOscillatorWithInteractionD(nn.Module):
     """Computes the local energy for spinless fermions in a 1D harmonic trap with Gaussian interactions.
 
@@ -78,6 +84,52 @@ class HarmonicOscillatorWithInteractionD(nn.Module):
         _int = self.gaussian_interaction(x)
 
         _eloc = _kin+_pot + _int
+        return _eloc, _kin, _pot, _int
+    
+
+class HarmonicOscillatorWithInteractionD_Bounded(HarmonicOscillatorWithInteractionD):
+    """Computes the local energy for spinless fermions in a harmonic trap with Gaussian interactions,
+    but only for walkers within a specified boundary box.
+    """
+    def __init__(self, net: nn.Module, V0: float, sigma0: float, nchunks: int, 
+                 dimensions: int, boundary: float = 4.0) -> None:
+        super().__init__(net, V0, sigma0, nchunks, dimensions)
+        self.boundary = boundary
+
+    def get_valid_walkers(self, x: Tensor) -> Tensor:
+        """Returns mask for walkers within boundary box."""
+        return torch.all(torch.abs(x) <= self.boundary, dim=(1,2))
+
+    def forward(self, x: Tensor) -> Tuple[Tensor, Tensor, Tensor, Tensor]:
+        """Computes energies using only walkers within boundary box.
+        
+        Args:
+            x (Tensor): Input positions [nwalkers, nfermions, dim]
+            
+        Returns:
+            Tuple[Tensor, Tensor, Tensor, Tensor]: (E_local, E_kinetic, E_potential, E_interaction)
+            Each energy is only averaged over valid walkers.
+        """
+        # Get mask for valid walkers
+        mask = self.get_valid_walkers(x)
+        num_valid = mask.sum()
+        
+        if num_valid == 0:
+            warnings.warn("No walkers found within boundary! Returning zeros.")
+            return torch.zeros_like(x[:, 0, 0]), torch.zeros_like(x[:, 0, 0]), \
+                torch.zeros_like(x[:, 0, 0]), torch.zeros_like(x[:, 0, 0])
+        
+        # Compute all energy terms using parent class methods
+        _kin = super().kinetic(x)
+        _pot = super().potential(x)
+        _int = super().gaussian_interaction(x)
+        
+        # Zero out energies for invalid walkers and normalize by number of valid walkers
+        _kin = _kin * mask 
+        _pot = _pot * mask 
+        _int = _int * mask 
+        _eloc = _kin + _pot + _int
+        
         return _eloc, _kin, _pot, _int
     
 class HarmonicOscillatorWithInteractionDold2(nn.Module):
