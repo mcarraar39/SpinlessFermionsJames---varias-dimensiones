@@ -1,0 +1,4 @@
+Resultados de entrenar el modelo para 4 fermiones en 3version del cluster y generar los resultados en Spinless...-varias dimensiones
+
+Occupation Values:  [1.00385288 0.99994214 0.93940671 0.93498279]
+Entropy: 0.11777307177932618 | Max: 1.3862943611198906
