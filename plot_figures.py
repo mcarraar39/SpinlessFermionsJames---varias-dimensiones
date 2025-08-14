@@ -10,6 +10,8 @@ import matplotlib.colors as colors
 import colorcet as cc
 
 import argparse
+from src.Pretraining import HermitePolynomialMatrixND
+from scipy.ndimage import rotate
 
 parser = argparse.ArgumentParser(prog="SpinlessFermions",
                                  usage='%(prog)s [options]',
@@ -30,7 +32,7 @@ parser.add_argument("-B","--num_batches",   type=int,   default=10000, help="Num
 parser.add_argument("-W","--num_walkers",   type=int,   default=10096,  help="Number of walkers used to generate configuration")
 parser.add_argument("--num_sweeps",         type=int,   default=10,    help="Number of sweeped/discard proposed configurations between accepted batches (The equivalent of thinning constant)")
 parser.add_argument("--dtype",              type=str,   default='float32',      help='Default dtype')
-parser.add_argument("-Dim", "--dimensions", type=int,   default=1,     help="Number of dimensions of the physical system")
+parser.add_argument("-Dim", "--dimensions", type=int,   default=2,     help="Number of dimensions of the physical system")
 parser.add_argument("--comp", choices=['x','y','z'], default='x',
                     help="Component to show for natural-orbitals/OBDM if D > 1")
 args = parser.parse_args()
@@ -76,7 +78,7 @@ optim = "Adam"
 device='cpu'#'cuda'
 #dtype='float32'
 
-analysis_datapath = "analysis/PHYS_A%02i_H%03i_L%02i_D%02i_%s_W%04i_P%06i_V%4.2e_S%4.2e_%s_PT_%s_device_%s_dtype_%s_dim_%02i.npz" % \
+analysis_datapath = "analysis/PHYS_A%02i_H%03i_L%02i_D%02i_%s_W%04i_P%06i_V%4.4e_S%4.4e_%s_PT_%s_device_%s_dtype_%s_dim_%02i.npz" % \
                 (nfermions, num_hidden, num_layers, num_dets, func.__class__.__name__, nwalkers, preepochs, V0, sigma0, \
                  optim, False, device, dtype,dimensions)#load the data to plot
 
@@ -103,7 +105,7 @@ else:
     X, Y = density_edges[0], density_edges[1]  # Assuming 2D for simplicity
     proj_xy = density_grid.sum(axis=tuple(range(2, dimensions))) \
               if dimensions > 2 else density_grid
-    plt.pcolormesh(X, Y, proj_xy, cmap='viridis')
+    plt.pcolormesh(X, Y, proj_xy.T, cmap='viridis')
     plt.gca().set_aspect('equal')
     plt.colorbar()
     plt.title(f'Density n(x,y) (projected) for {nfermions} fermions')
@@ -122,6 +124,19 @@ else:
 
 # radial profile if D == 3
 if dimensions == 3: 
+    density_grid = loaded['density_grid'] #shape N^D
+    density_edges = loaded['density_edges'] #list of edge arrays
+    Y, Z = density_edges[1], density_edges[2]  # Assuming 2D for simplicity
+    proj_yz = density_grid.sum(axis=(0,) + tuple(range(3, dimensions))) \
+              if dimensions > 2 else density_grid
+    plt.pcolormesh(Y, Z, proj_yz.T, cmap='viridis')
+    plt.gca().set_aspect('equal')
+    plt.colorbar()
+    plt.title(f'Density n(y,z) (projected) for {nfermions} fermions')
+    plt.xlabel('y')
+    plt.ylabel('z')
+    plt.show()
+
     cx, cy, cz = [e[:-1] + np.diff(e) / 2. for e in density_edges]
     Xc, Yc, Zc = np.meshgrid(cx, cy, cz, indexing='ij')
     rr = np.sqrt(Xc**2 + Yc**2 + Zc**2).flatten()  # Radial distance
@@ -135,6 +150,247 @@ if dimensions == 3:
     plt.xlabel('Radial distance, r')
     plt.ylabel('Density, n(r)')
     plt.title('Radial density profile n(r) for %i fermions' % (nfermions))
+    plt.show()
+
+########################################################################################################################################################################
+####################################################################### Comparison with the analytical density ##########################################################################################
+###########################################################################################################################################################################
+@torch.no_grad()
+def analytic_density_1d_from_hpm(xgrid, nfermions, device="cpu"):
+    """
+    Devuelve n_ana(x) evaluada en xgrid (shape = (Nx,))
+    usando HermitePolynomialMatrixND con Dim = 1.
+    """
+    hpm = HermitePolynomialMatrixND(num_particles=nfermions, Dim=1).to(device)
+    hpm.eval()
+
+    # xgrid → tensor [1, Nx, 1]  (nwalkers=1, A=Nx, Dim=1)
+    coords = torch.tensor(xgrid, device=device).unsqueeze(0).unsqueeze(-1)
+
+    # Salida HPM: [1, 1, Nx, N]  →  suma |φ|² sobre el último eje
+    n_ana = hpm(coords).pow(2).sum(dim=-1).squeeze()      # shape (Nx,)
+    return n_ana.cpu().numpy()
+
+
+@torch.no_grad()
+def analytic_density_from_hpm(edges, nfermions, device="cpu"):
+    """
+    Returns an analytic density array with the SAME shape as `density_grid`
+    using HermitePolynomialMatrixND.  Works for D = 1, 2 or 3.
+
+    edges  : list of bin-edge arrays    (same object as loaded['density_edges'])
+    nfermions : number of particles N
+    device : 'cpu' | 'cuda'
+    """
+    Dim = len(edges)
+    hpm = HermitePolynomialMatrixND(num_particles=nfermions, Dim=Dim).to(device)
+    hpm.eval()
+
+    # --- 1. Mesh of bin centres --------------------------------------------
+    centres = [e[:-1] + np.diff(e)/2 for e in edges]          # list (Nx, Ny, ...)
+    mesh    = np.meshgrid(*centres, indexing="ij")
+    grid_shape = mesh[0].shape                                # e.g. (Nx, Ny, Nz)
+    Npts = np.prod(grid_shape)
+
+    # --- 2. Flatten coordinates into [1, Npts, Dim] ------------------------
+    coords_np = np.stack([m.ravel() for m in mesh], axis=1)   # (Npts, Dim)
+    coords    = torch.tensor(coords_np, device=device).unsqueeze(0)  # [1, Npts, Dim]
+
+    # --- 3. Forward pass: orbitals → density -------------------------------
+    # hpm output: [nwalkers=1, 1, A=Npts, num_particles]
+    orbital_mat = hpm(coords)                     # shape (1, 1, Npts, N)
+    # sum |φ|² over the last axis (num_particles)
+    n_ana_flat  = orbital_mat.pow(2).sum(dim=-1).squeeze(0).squeeze(0)  # (Npts,)
+
+    # --- 4. Reshape back to Cartesian grid ---------------------------------
+    return n_ana_flat.cpu().numpy().reshape(grid_shape)
+
+if dimensions == 1:
+    n_ana = analytic_density_1d_from_hpm(density_xx, nfermions, device=device)
+else:
+    n_ana = analytic_density_from_hpm(density_edges, nfermions, device=device)
+
+
+
+
+##########Rotation
+def best_rotation_2d(arr_nqs, arr_ref, axes=(0, 1), n_angles=181):
+    """
+    Find the in-plane rotation angle θ (degrees) that minimises
+    ‖nqs(θ) – ref‖₂.  Returns (θ_best, rotated_arr).
+    """
+    thetas = np.linspace(0, 360, n_angles, endpoint=False, dtype=float)
+    best_theta, best_err = 0.0, np.inf
+    best_rot = None
+    for th in thetas:
+        rot = rotate(arr_nqs, angle=th, axes=axes, reshape=False,
+                     order=1, mode='nearest')
+        err = np.linalg.norm(rot - arr_ref)
+        if err < best_err:
+            best_theta, best_err, best_rot = th, err, rot
+    return best_theta, best_rot
+
+def rotate_3d(arr, angles_deg):
+    """
+    Apply a Z-Y-Z Euler rotation (γ, β, α) to a 3-D array.
+    angles_deg = (alpha, beta, gamma) in degrees.
+    """
+    a, b, g = angles_deg            # α, β, γ
+    out = rotate(arr, g, axes=(0,1), reshape=False, order=1, mode='nearest')  # Z
+    out = rotate(out, b, axes=(0,2), reshape=False, order=1, mode='nearest')  # Y
+    out = rotate(out, a, axes=(0,1), reshape=False, order=1, mode='nearest')  # Z
+    return out
+
+def apply_rotation_3d_and_error(density_nqs, density_ref,
+                                euler_deg, norm="L2",
+                                mode="nearest", order=1):
+    """
+    Parameters
+    ----------
+    density_nqs : np.ndarray (Nx, Ny, Nz)
+        Raw NQS density grid.
+    density_ref : np.ndarray (Nx, Ny, Nz)
+        Analytic/reference density grid.
+    euler_deg   : tuple(float, float, float)
+        (α, β, γ) in degrees ‒ Z-Y-Z convention.
+    norm        : {"L2", "L1"}
+        Which error metric to return.
+    mode, order : kwargs passed to scipy.ndimage.rotate.
+
+    Returns
+    -------
+    err_value : float
+        Chosen norm of (rotated − reference).
+    density_rot : np.ndarray
+        Rotated NQS density (same shape as input).
+    """
+    assert len(density_nqs.shape) == 3, "This helper is for 3-D grids only."
+    density_rot = rotate_3d(density_nqs, euler_deg)
+
+    diff = density_rot - density_ref
+    if norm.upper() == "L2":
+        err_value = np.linalg.norm(diff)
+    elif norm.upper() == "L1":
+        err_value = np.sum(np.abs(diff))
+    else:
+        raise ValueError("norm must be 'L1' or 'L2'.")
+
+    return euler_deg, density_rot
+
+def best_rotation_3d(arr_nqs, arr_ref, coarse_step=30):
+    """
+    Very coarse grid search over Euler angles (α, β, γ) ∈ [0,360) × [0,180] × [0,360).
+    Returns (angles_best, rotated_arr).  Refine manually if necessary.
+    """
+    alphas = np.arange(0, 360, coarse_step)
+    betas  = np.arange(0, 181, coarse_step)         # [0,180]
+    gammas = np.arange(0, 360, coarse_step)
+    best_angles, best_err, best_rot = None, np.inf, None
+    for a in alphas:
+        for b in betas:
+            for g in gammas:
+                rot = rotate_3d(arr_nqs, (a, b, g))
+                err = np.linalg.norm(rot - arr_ref)
+                if err < best_err:
+                    best_angles, best_err, best_rot = (a, b, g), err, rot
+    return best_angles, best_rot
+
+'''Best Euler angles (α,β,γ) ≈ (0, 90, 210) for 2 fermions'''
+# -----------------------------------------------------------------
+best2ferm=(0,90,210)
+best3ferm=(300, 90, 0)
+if dimensions == 2:
+    # full XY arrays
+    theta, density_grid_rot = best_rotation_2d(density_grid, n_ana.T)
+    print(f"[INFO] Best in-plane rotation: θ ≈ {theta:.1f}°")
+
+elif dimensions == 3:
+    # Work on the full 3-D grids
+    print(f"[INFO] Finding best rotation for 3D density grid (shape {density_grid.shape})...")
+    angles, density_grid_rot = apply_rotation_3d_and_error(density_grid, n_ana.T, euler_deg=best3ferm)
+    print(f"[INFO] Best Euler angles (α,β,γ) ≈ {angles}")
+
+    # If you also keep the projected maps, update them:
+    density_grid = density_grid_rot
+##########Plot
+
+if dimensions == 1:
+    print("Analytical density shape:", n_ana.shape)
+    plt.figure()
+    plt.title('Analytical n(x) for %i fermions' % (nfermions))
+    plt.xlabel('Position, x')
+    plt.ylabel('Density, n(x)')
+    #plt.ylim(0, 2)
+    plt.plot(density_xx, n_ana.T)
+    plt.show()
+# ---------- |Δn| visualisation ----------------------------------------------
+if dimensions == 1:
+    # nqs density in 'density_psi', analytic in 'n_ana'  (shape = (Nx,))
+    delta_abs = np.abs(density_psi - n_ana.T)
+
+    plt.figure()
+    plt.title(r'Absolute difference $|\,\Delta n(x)\,|$')
+    plt.xlabel('Position, x')
+    plt.ylabel(r'$|\,\Delta n(x)\,|$')
+    plt.plot(density_xx, delta_abs, color='tab:red')
+    plt.axhline(0, color='k', lw=0.8)
+    plt.tight_layout()
+    plt.show()
+
+# ---------------------------------------------------------------------------
+elif dimensions == 2:
+    X, Y = density_edges[0], density_edges[1]          # bin edges
+    plt.figure()
+    plt.pcolormesh(X, Y, n_ana, cmap='viridis')
+    plt.gca().set_aspect('equal')
+    plt.colorbar()
+    plt.title(f'Density n(x,y) (projected) for {nfermions} fermions')
+    plt.xlabel('x')
+    plt.ylabel('y')
+    plt.show()
+    # densities have shape (Nx, Ny)
+    delta_grid = np.abs(density_grid_rot.T - n_ana)          # full 2-D array
+
+    X, Y = density_edges[0], density_edges[1]          # bin edges
+    plt.figure()
+    plt.pcolormesh(X, Y, delta_grid, cmap='inferno')
+    plt.gca().set_aspect('equal')
+    plt.colorbar(label=r'$|\,\Delta n(x,y)\,|$')
+    plt.title(fr'Absolute difference $|\,\Delta n(x,y)\,|$ '
+              f'for {nfermions} fermions')
+    plt.xlabel('x');  plt.ylabel('y')
+    plt.tight_layout()
+    plt.show()
+
+# ---------------------------------------------------------------------------
+elif dimensions == 3:
+    # densities have shape (Nx, Ny, Nz)
+    delta_grid = np.abs(density_grid.T - n_ana)
+
+    # ---- XY projection -----------------------------------------------------
+    X, Y = density_edges[0], density_edges[1]
+    proj_xy = delta_grid.sum(axis=2) * np.diff(density_edges[2])[0]  # integrate z
+
+    plt.figure()
+    plt.pcolormesh(X, Y, proj_xy.T, cmap='inferno')
+    plt.gca().set_aspect('equal')
+    plt.colorbar(label=r'$|\,\Delta n(x,y)\,|$ (integrated over z)')
+    plt.title(fr'$|\,\Delta n(x,y)\,|$  (proj.) for {nfermions} fermions')
+    plt.xlabel('x');  plt.ylabel('y')
+    plt.tight_layout()
+    plt.show()
+
+    # ---- YZ projection -----------------------------------------------------
+    Y, Z = density_edges[1], density_edges[2]
+    proj_yz = delta_grid.sum(axis=0) * np.diff(density_edges[0])[0]  # integrate x
+
+    plt.figure()
+    plt.pcolormesh(Y, Z, proj_yz.T, cmap='inferno')
+    plt.gca().set_aspect('equal')
+    plt.colorbar(label=r'$|\,\Delta n(y,z)\,|$ (integrated over x)')
+    plt.title(fr'$|\,\Delta n(y,z)\,|$  (proj.) for {nfermions} fermions')
+    plt.xlabel('y');  plt.ylabel('z')
+    plt.tight_layout()
     plt.show()
 
 ########################################################################################################################################################################

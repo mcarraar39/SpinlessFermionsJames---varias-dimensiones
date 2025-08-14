@@ -4,7 +4,7 @@ import torch
 from torch import nn, Tensor
 import os, sys, time
 
-torch.manual_seed(0)
+torch.manual_seed(0) #0
 torch.set_printoptions(4)
 torch.backends.cudnn.benchmark=True
 torch.set_default_dtype(torch.float32)
@@ -113,13 +113,13 @@ optim = torch.optim.Adam(params=net.parameters(), lr=1e-4) #new optimizer
 
 mode = args.mode
 if(mode=='standard'):
-    model_path = "results/energy/checkpoints/A%02i_H%03i_L%02i_D%02i_%s_W%04i_P%06i_V%4.2e_S%4.2e_%s_PT_%s_device_%s_dtype_%s_dim_%02i_chkp.pt" % \
+    model_path = "results/energy/checkpoints/A%02i_H%03i_L%02i_D%02i_%s_W%04i_P%06i_V%4.4e_S%4.4e_%s_PT_%s_device_%s_dtype_%s_dim_%02i_chkp.pt" % \
                     (nfermions, num_hidden, num_layers, num_dets, func.__class__.__name__, nwalkers, preepochs, V0, sigma0, \
                      optim.__class__.__name__, False, device, dtype,dimensions)
-    filename = "results/energy/data/A%02i_H%03i_L%02i_D%02i_%s_W%04i_P%06i_V%4.2e_S%4.2e_%s_PT_%s_device_%s_dtype_%s_dim_%02i.csv" % \
+    filename = "results/energy/data/A%02i_H%03i_L%02i_D%02i_%s_W%04i_P%06i_V%4.4e_S%4.4e_%s_PT_%s_device_%s_dtype_%s_dim_%02i.csv" % \
                     (nfermions, num_hidden, num_layers, num_dets, func.__class__.__name__, nwalkers, preepochs, V0, sigma0, \
                      optim.__class__.__name__, False, device, dtype,dimensions)
-    analysis_datapath = "analysis/PHYS_A%02i_H%03i_L%02i_D%02i_%s_W%04i_P%06i_V%4.2e_S%4.2e_%s_PT_%s_device_%s_dtype_%s_dim_%02i.npz" % \
+    analysis_datapath = "analysis/PHYS_A%02i_H%03i_L%02i_D%02i_%s_W%04i_P%06i_V%4.4e_S%4.4e_%s_PT_%s_device_%s_dtype_%s_dim_%02i.npz" % \
                 (nfermions, num_hidden, num_layers, num_dets, func.__class__.__name__, nwalkers, preepochs, V0, sigma0, \
                  optim.__class__.__name__, False, device, dtype,dimensions)
 elif(mode=='notrap'):
@@ -149,6 +149,7 @@ else:
 writer = load_dataframe(filename)
 output_dict = load_model(model_path=model_path, device=device, net=net, optim=optim, sampler=sampler)
 
+# .......................................................................................
 # Initialize storage tensors
 configurations = torch.zeros(size=(nbatches, nwalkers, nfermions,dimensions), dtype=torch.get_default_dtype(), device='cpu') #store on CPU #modified 
 

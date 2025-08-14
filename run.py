@@ -5,6 +5,7 @@
 e.g python run.py --num_fermions 4 --num_hidden 128 --V0 0.5'''
 import argparse
 from tqdm import tqdm
+import matplotlib.pyplot as plt
 
 parser = argparse.ArgumentParser(prog="SpinlessFermions",
                                  usage='%(prog)s [options]',
@@ -12,7 +13,8 @@ parser = argparse.ArgumentParser(prog="SpinlessFermions",
                                  epilog="and fin")
 #https://stackoverflow.com/questions/14117415/in-python-using-argparse-allow-only-positive-integers/14117567
 
-parser.add_argument("-N", "--num_fermions", type=int,   default=3,     help="Number of fermions in physical system")
+parser.add_argument("-N", "--num_fermions", type=int,   default=4
+                    ,     help="Number of fermions in physical system")
 parser.add_argument("-H", "--num_hidden",   type=int,   default=64,    help="Number of hidden neurons per layer")#64
 parser.add_argument("-L", "--num_layers",   type=int,   default=2,     help="Number of layers within the network")
 parser.add_argument("-D", "--num_dets",     type=int,   default=1,     help="Number of determinants within the network's final layer")
@@ -35,6 +37,7 @@ from torch import nn, Tensor
 import numpy as np
 
 import os, sys, time
+from pathlib import Path
 
 torch.manual_seed(0) #set seed
 torch.set_printoptions(4) #set the digits of precision
@@ -305,6 +308,20 @@ for preepoch in range(start, preepochs+1):     #in case it has already been trai
     sys.stdout.flush()
 
 print("\n")
+
+# x, _ = sampler(n_sweeps=n_sweeps)  # x.shape = [nwalkers, A, D]
+
+# # Escoge un único fermión (por ejemplo, el primero: índice 0)
+# coords = x[:, 0, :]        # [nwalkers, 2] → coordenadas (x, y) del primer fermión
+# x1, y1 = coords[:, 0].cpu(), coords[:, 1].cpu()
+
+# plt.figure(figsize=(6,6))
+# plt.scatter(x1, y1, s=3, alpha=0.4)
+# plt.xlabel(r'$x$'); plt.ylabel(r'$y$')
+# plt.title('Distribución inicial de walkers – primer fermión')
+# plt.axis('equal')
+# plt.tight_layout()
+# plt.show()
 
 #####################################################################################################################################
 #####                                                   Debugging                                                                    #####
@@ -720,6 +737,21 @@ for epoch in progress_bar:
 
 from src.utils import generate_final_energy, round_to_err, str_with_err
 
+
+# x, _ = sampler(n_sweeps=n_sweeps)  # x.shape = [nwalkers, A, D]
+
+# # Escoge un único fermión (por ejemplo, el primero: índice 0)
+# coords = x[:, 0, :]        # [nwalkers, 2] → coordenadas (x, y) del primer fermión
+# x1, y1 = coords[:, 0].cpu(), coords[:, 1].cpu()
+
+# plt.figure(figsize=(6,6))
+# plt.scatter(x1, y1, s=3, alpha=0.4)
+# plt.xlabel(r'$x$'); plt.ylabel(r'$y$')
+# plt.title('Distribución inicial de walkers – primer fermión')
+# plt.axis('equal')
+# plt.tight_layout()
+# plt.show()
+
 #####################################################################################################################################
 #####                                                   Debugging                                                                    #####
 ##########################################################################################################################################
@@ -853,6 +885,13 @@ if debug==True and dimensions == 2:
         
 if debug and dimensions == 2:
     animate_sampler2D(sampler, sweeps=300)
+
+
+
+
+
+
+
 ###############################################################################################################################################
 #####                                               FINAL MODEL EVALUATION                                                                #####
 ###############################################################################################################################################
@@ -860,41 +899,61 @@ if debug and dimensions == 2:
 n_batches = 10_000
 
 #In order to compute the final energy, we use the trained neural network (net) to generate many-body quantum configurations using Metropolis-Hastings sampling
-energy_stats = generate_final_energy(calc_elocal=calc_elocal,
-                                        sampler=sampler,
-                                        n_batches=n_batches,
-                                        chunk_size=None, #full-batch vectorization
-                                        n_sweeps=1,     #10 is fine, 400 is too much 
-                                        storage_device=torch.device('cpu')) #store on cpu to save memory for GPU
-energy_mean=energy_stats['mean']
-error_of_mean=energy_stats['error_of_mean']
-batch_variance=energy_stats['batch_variance']
-variance=energy_stats['variance']
-R_hat=energy_stats['R_hat']
-ESS=energy_stats['ESS']
-tau_min=energy_stats['tau_min']
-tau_avg=energy_stats['tau_avg']
-tau_std=energy_stats['tau_std']
-tau_max=energy_stats['tau_max']
-
-energy_mean, error_of_mean = round_to_err(energy_mean.item(), error_of_mean.item())
-energy_str = str_with_err(energy_mean, error_of_mean)
-print(f"Energy: {energy_str} | R_hat: {R_hat:6.4f}")
-
 final_energy_str = DIR+"results/final/FINAL_A%02i_H%03i_L%02i_D%02i_%s_W%04i_P%06i_V%4.4e_S%4.4e_%s_PT_%s_device_%s_dtype_%s_dim_%02i.npz" % \
                 (nfermions, num_hidden, num_layers, num_dets, func.__class__.__name__, nwalkers, preepochs, V0, sigma0, optim.__class__.__name__, False, 
 device, dtype,dimensions)
-print(f"Saving to {final_energy_str}")
-data = {'energy_mean': energy_mean,
-        'error_of_mean': error_of_mean,
-        'energy_str':energy_str, #the energy mean with its error in a string version
-        'batch_variance':batch_variance, #variance of the means across batches
-        'variance':variance, #variance of the energy mean
-        'R_hat':R_hat, #Gelman-Rubin diagnostic is a convergence diagnostic
-        'ESS':ESS,#effective sample size
-        'tau_min':tau_min, #minimum autocorrelation time across chains
-        'tau_avg':tau_avg, #mean autocorrelation time
-        'tau_std':tau_std, #standard deviation of the autocorrelation time
-        'tau_max':tau_max, #maximum autocorrelation time
-        'CI':gs_CI}
-np.savez(final_energy_str, **data)
+
+final_energy_path = Path(final_energy_str)
+
+# Asegura que el directorio existe antes de guardar (si toca)
+final_energy_path.parent.mkdir(parents=True, exist_ok=True)
+if final_energy_path.is_file():
+    print(f"Cargando energía final desde {final_energy_path}")
+
+    with np.load(final_energy_path, allow_pickle=True) as npz:
+        # Recuperar string con energía
+        energy_str = npz["energy_str"].item() if npz["energy_str"].shape == () else npz["energy_str"]
+        #Recuperar media del error
+        error_of_mean = float(npz["error_of_mean"])  # float() funciona para 0-D arrays
+        # Recuperar R_hat (puede ser escalar numpy o array 0-D)
+        R_hat = float(npz["R_hat"])  # float() funciona para 0-D arrays
+    print(f"Energy: {energy_str} with error {error_of_mean} | R_hat: {R_hat:6.4f}")
+
+else:
+    energy_stats = generate_final_energy(calc_elocal=calc_elocal,
+                                            sampler=sampler,
+                                            n_batches=n_batches,
+                                            chunk_size=None, #full-batch vectorization
+                                            n_sweeps=1,     #10 is fine, 400 is too much 
+                                            storage_device=torch.device('cpu')) #store on cpu to save memory for GPU
+    energy_mean=energy_stats['mean']
+    error_of_mean=energy_stats['error_of_mean']
+    batch_variance=energy_stats['batch_variance']
+    variance=energy_stats['variance']
+    R_hat=energy_stats['R_hat']
+    ESS=energy_stats['ESS']
+    tau_min=energy_stats['tau_min']
+    tau_avg=energy_stats['tau_avg']
+    tau_std=energy_stats['tau_std']
+    tau_max=energy_stats['tau_max']
+
+    energy_mean, error_of_mean = round_to_err(energy_mean.item(), error_of_mean.item())
+    energy_str = str_with_err(energy_mean, error_of_mean)
+    print(f"Energy: {energy_str} | R_hat: {R_hat:6.4f}")
+
+
+
+    print(f"Saving to {final_energy_str}")
+    data = {'energy_mean': energy_mean,
+            'error_of_mean': error_of_mean,
+            'energy_str':energy_str, #the energy mean with its error in a string version
+            'batch_variance':batch_variance, #variance of the means across batches
+            'variance':variance, #variance of the energy mean
+            'R_hat':R_hat, #Gelman-Rubin diagnostic is a convergence diagnostic
+            'ESS':ESS,#effective sample size
+            'tau_min':tau_min, #minimum autocorrelation time across chains
+            'tau_avg':tau_avg, #mean autocorrelation time
+            'tau_std':tau_std, #standard deviation of the autocorrelation time
+            'tau_max':tau_max, #maximum autocorrelation time
+            'CI':gs_CI}
+    np.savez(final_energy_str, **data)
